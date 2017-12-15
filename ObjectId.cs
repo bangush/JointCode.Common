@@ -1,0 +1,288 @@
+﻿using System;
+using System.Diagnostics;
+using System.Net;
+using System.Runtime.Serialization;
+using System.Security.Cryptography;
+using System.Text;
+//using System.Threading.Tasks;
+
+namespace SharpFileDB
+{
+    /// <summary>
+    /// 用于生成唯一的编号。
+    /// </summary>
+    [Serializable]
+    public sealed class ObjectId : ISerializable, IComparable<ObjectId>, IComparable
+    {
+        string _string;
+
+        ObjectId()
+        {
+        }
+
+        internal ObjectId(string value)
+            : this(DecodeHex(value))
+        {
+        }
+
+        internal ObjectId(byte[] value)
+        {
+            Value = value;
+        }
+
+        internal static ObjectId Empty
+        {
+            get { return new ObjectId("000000000000000000000000"); }
+        }
+
+        internal byte[] Value { get; set; }
+
+        /// <summary>
+        /// 获取一个新的<see cref="ObjectId"/>。
+        /// </summary>
+        /// <returns></returns>
+        public static ObjectId NewId()
+        {
+            return new ObjectId { Value = ObjectIdGenerator.Generate() };
+        }
+
+        internal static bool TryParse(string value, out ObjectId objectId)
+        {
+            objectId = Empty;
+            if (value == null || value.Length != 24)
+            {
+                return false;
+            }
+
+            try
+            {
+                objectId = new ObjectId(value);
+                return true;
+            }
+            catch (FormatException)
+            {
+                return false;
+            }
+        }
+
+        static byte[] DecodeHex(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+                throw new ArgumentNullException("value");
+
+            var chars = value.ToCharArray();
+            var numberChars = chars.Length;
+            var bytes = new byte[numberChars / 2];
+
+            for (var i = 0; i < numberChars; i += 2)
+            {
+                bytes[i / 2] = Convert.ToByte(new string(chars, i, 2), 16);
+            }
+
+            return bytes;
+        }
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <returns></returns>
+        public override int GetHashCode()
+        {
+            return Value != null ? ToString().GetHashCode() : 0;
+        }
+
+        /// <summary>
+        /// 显示此对象的信息，便于调试。
+        /// </summary>
+        /// <returns></returns>
+        public override string ToString()
+        {
+            if (_string == null && Value != null)
+            {
+                _string = BitConverter.ToString(Value)
+                  .Replace("-", string.Empty)
+                  .ToLowerInvariant();
+            }
+
+            return _string;
+        }
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="obj"></param>
+        /// <returns></returns>
+        public override bool Equals(object obj)
+        {
+            var other = obj as ObjectId;
+            return Equals(other);
+        }
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="other"></param>
+        /// <returns></returns>
+        public bool Equals(ObjectId other)
+        {
+            return other != null && ToString() == other.ToString();
+        }
+
+        //public static implicit operator string(ObjectId objectId)
+        //{
+        //    return objectId == null ? null : objectId.ToString();
+        //}
+
+        //public static implicit operator ObjectId(string value)
+        //{
+        //    return new ObjectId(value);
+        //}
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="left"></param>
+        /// <param name="right"></param>
+        /// <returns></returns>
+        public static bool operator ==(ObjectId left, ObjectId right)
+        {
+            if (ReferenceEquals(left, right))
+            {
+                return true;
+            }
+
+            if (((object)left == null) || ((object)right == null))
+            {
+                return false;
+            }
+
+            return left.Equals(right);
+        }
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="left"></param>
+        /// <param name="right"></param>
+        /// <returns></returns>
+        public static bool operator !=(ObjectId left, ObjectId right)
+        {
+            return !(left == right);
+        }
+
+        #region ISerializable 成员
+
+        const string strValue = "";
+        void ISerializable.GetObjectData(SerializationInfo info, StreamingContext context)
+        {
+            string value = ToString();
+            info.AddValue(strValue, value);
+        }
+
+        #endregion
+
+        ObjectId(SerializationInfo info, StreamingContext context)
+        {
+            string value = info.GetString(strValue);
+            Value = DecodeHex(value);
+        }
+
+
+        #region IComparable<ObjectId> 成员
+
+        /// <summary>
+        /// 根据<see cref="ObjectId.ToString()"/>的值比较两个对象。
+        /// </summary>
+        /// <param name="other"></param>
+        /// <returns></returns>
+        public int CompareTo(ObjectId other)
+        {
+            if (other == null) { return 1; }
+
+            string thisStr = ToString();
+            string otherStr = other.ToString();
+            int result = thisStr.CompareTo(otherStr);
+
+            return result;
+        }
+
+        #endregion
+
+        #region IComparable 成员
+
+        /// <summary>
+        /// 根据<see cref="ObjectId.ToString()"/>的值比较两个对象。
+        /// </summary>
+        /// <param name="obj"></param>
+        /// <returns></returns>
+        public int CompareTo(object obj)
+        {
+            ObjectId other = obj as ObjectId;
+            return CompareTo(other);
+        }
+
+        #endregion
+    }
+
+    internal static class ObjectIdGenerator
+    {
+        static readonly DateTime Epoch =
+          new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        static readonly object _innerLock = new object();
+        static int _counter;
+        static readonly byte[] _machineHash = GenerateHostHash();
+        static readonly byte[] _processId =
+          BitConverter.GetBytes(GenerateProcessId());
+
+        internal static byte[] Generate()
+        {
+            var oid = new byte[12];
+            var copyidx = 0;
+
+            Array.Copy(BitConverter.GetBytes(GenerateTime()), 0, oid, copyidx, 4);
+            copyidx += 4;
+
+            Array.Copy(_machineHash, 0, oid, copyidx, 3);
+            copyidx += 3;
+
+            Array.Copy(_processId, 0, oid, copyidx, 2);
+            copyidx += 2;
+
+            Array.Copy(BitConverter.GetBytes(GenerateCounter()), 0, oid, copyidx, 3);
+
+            return oid;
+        }
+
+        static int GenerateTime()
+        {
+            var now = DateTime.UtcNow;
+            var nowtime = new DateTime(Epoch.Year, Epoch.Month, Epoch.Day,
+              now.Hour, now.Minute, now.Second, now.Millisecond);
+            var diff = nowtime - Epoch;
+            return Convert.ToInt32(Math.Floor(diff.TotalMilliseconds));
+        }
+
+        static byte[] GenerateHostHash()
+        {
+            using (var md5 = MD5.Create())
+            {
+                var host = Dns.GetHostName();
+                return md5.ComputeHash(Encoding.Default.GetBytes(host));
+            }
+        }
+
+        static int GenerateProcessId()
+        {
+            var process = Process.GetCurrentProcess();
+            return process.Id;
+        }
+
+        static int GenerateCounter()
+        {
+            lock (_innerLock)
+            {
+                return _counter++;
+            }
+        }
+    }
+}
